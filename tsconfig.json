@@ -18,6 +18,7 @@
       "es7",
       "dom"
     ],
+    "types": ["office-js", "webpack-env"],
     "pretty": true,
     "typeRoots": [
       "node_modules/@types"
@@ -28,10 +29,10 @@
   ],
   "compileOnSave": false,
   "buildOnSave": false,
-  "ts-node": { 
+  "ts-node": {
     "compilerOptions": {
       "module": "commonjs"
     },
-    "files": true 
+    "files": true
   }
 }

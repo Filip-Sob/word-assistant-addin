@@ -12,3 +12,21 @@ export async function insertText(text: string) {
     console.log("Error: " + error);
   }
 }
+export async function getSelectedText(): Promise<string> {
+  return Word.run(async (context) => {
+    const range = context.document.getSelection();
+    range.load("text");
+
+    await context.sync();
+
+    return range.text || "";
+  });
+}
+
+export async function insertTextAfterSelection(text: string): Promise<void> {
+  await Word.run(async (context) => {
+    const range = context.document.getSelection();
+    range.insertText("\n\n--- Word Assistant ---\n" + text, Word.InsertLocation.after);
+    await context.sync();
+  });
+}
