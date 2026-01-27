@@ -1,10 +1,10 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 
 type AppProps = {
   title: string;
 };
 
-type Mode = "REWRITE" | "EXPLAIN";
+type Mode = "REWRITE" | "EXPLAIN" | "DOCUMENT";
 
 type AssistResponse = {
   answer: string;
@@ -48,12 +48,59 @@ const btnPrimary: React.CSSProperties = {
   fontSize: 16,
 };
 
+const iconBtn: React.CSSProperties = {
+  ...btnBase,
+  padding: "8px 10px",
+  width: 44,
+  background: GRAY,
+  fontWeight: 800,
+};
+
 export default function App({ title }: AppProps) {
   const [mode, setMode] = useState<Mode>("REWRITE");
   const [contextText, setContextText] = useState("");
   const [instruction, setInstruction] = useState("");
+
+  // Global 1-step document snapshots (Undo/Redo) for ALL operations
+  const [undoDoc, setUndoDoc] = useState<string | null>(null);
+  const [redoDoc, setRedoDoc] = useState<string | null>(null);
+  const [docState, setDocState] = useState<"AFTER" | "BEFORE" | null>(null);
+
+  const canUndo = useMemo(() => !!undoDoc && docState === "AFTER", [undoDoc, docState]);
+  const canRedo = useMemo(() => !!redoDoc && docState === "BEFORE", [redoDoc, docState]);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const infoText =
+    "Modes:\n" +
+    "• Rewrite: modifies selected text and replaces it.\n" +
+    "• Explain: adds analysis/commentary below selection (original stays).\n" +
+    "• Document: runs on the whole document (replaces whole content).";
+
+  const readWholeDocument = async (): Promise<string> => {
+    return await Word.run(async (context) => {
+      const body = context.document.body;
+      body.load("text");
+      await context.sync();
+      return (body.text || "").trim();
+    });
+  };
+
+  const replaceWholeDocument = async (text: string) => {
+    await Word.run(async (context) => {
+      const body = context.document.body;
+      body.insertText(text, Word.InsertLocation.replace);
+      await context.sync();
+    });
+  };
+
+  const captureSnapshots = async (before: string) => {
+    const after = await readWholeDocument();
+    setUndoDoc(before);
+    setRedoDoc(after);
+    setDocState("AFTER");
+  };
 
   const useSelection = async () => {
     setError(null);
@@ -78,7 +125,20 @@ export default function App({ title }: AppProps) {
     setError(null);
 
     try {
-      let ctx = contextText.trim();
+      const instr = instruction.trim();
+      if (!instr) throw new Error("Wpisz polecenie.");
+
+      // snapshot BEFORE (global)
+      const beforeDoc = await readWholeDocument();
+
+      // build context for backend
+      let ctx = "";
+
+      if (mode === "DOCUMENT") {
+      // Document może być pusty – wtedy generujemy treść od zera
+     ctx = beforeDoc ?? "";
+    } else {
+      ctx = contextText.trim();
 
       const liveSelection = await Word.run(async (context) => {
         const range = context.document.getSelection();
@@ -87,17 +147,15 @@ export default function App({ title }: AppProps) {
         return (range.text || "").trim();
       });
 
-      if (liveSelection) {
-        ctx = liveSelection;
-      }
-
-      const instr = instruction.trim();
-      if (!instr) throw new Error("Wpisz polecenie.");
+      if (liveSelection) ctx = liveSelection;
 
       if (mode === "EXPLAIN" && !ctx) {
         throw new Error("Tryb Explain wymaga zaznaczonego tekstu.");
       }
+    }
 
+
+      // call backend
       const res = await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -114,33 +172,101 @@ export default function App({ title }: AppProps) {
       }
 
       const data: AssistResponse = await res.json();
-      const answer = data.answer?.trim();
-      if (!answer) throw new Error("Pusta odpowiedź z backendu.");
+      const raw = data.answer ?? "";
+      const answer = raw.trim();
 
-      await Word.run(async (context) => {
-        const range = context.document.getSelection();
-        range.load("text");
-        await context.sync();
+// Explain musi mieć treść, ale Rewrite/Document mogą legalnie zwrócić pusty tekst (delete)
+if (!answer && mode === "EXPLAIN") {
+  throw new Error("Pusta odpowiedź z backendu.");
+}
 
-        if (mode === "REWRITE") {
-          range.insertText(answer, Word.InsertLocation.replace);
-        } else {
-          range.insertParagraph("--- Assistant (Explain) ---", Word.InsertLocation.after);
-          range.insertParagraph(answer, Word.InsertLocation.after);
-        }
 
-        await context.sync();
-      });
+      // apply to Word depending on mode
+      if (mode === "DOCUMENT") {
+        await replaceWholeDocument(raw);
+      } else {
+        await Word.run(async (context) => {
+          const range = context.document.getSelection();
+          range.load("text");
+          await context.sync();
+
+          if (mode === "REWRITE") {
+            range.insertText(raw, Word.InsertLocation.replace);
+          } else {
+            range.insertParagraph("--- Assistant (Explain) ---", Word.InsertLocation.after);
+            range.insertParagraph(raw, Word.InsertLocation.after);
+          }
+
+          await context.sync();
+        });
+      }
+
+      // snapshot AFTER (global)
+      await captureSnapshots(beforeDoc);
     } catch (e: any) {
-      setError(e.message ?? "Nieznany błąd");
+      setError(e?.message ?? "Nieznany błąd");
     } finally {
       setLoading(false);
     }
   };
 
+  const undo = async () => {
+    if (loading || !canUndo || !undoDoc) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await replaceWholeDocument(undoDoc);
+      setDocState("BEFORE");
+    } catch (e: any) {
+      setError(e?.message ?? "Nieznany błąd");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const redo = async () => {
+    if (loading || !canRedo || !redoDoc) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await replaceWholeDocument(redoDoc);
+      setDocState("AFTER");
+    } catch (e: any) {
+      setError(e?.message ?? "Nieznany błąd");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const contextPreview =
+    contextText.length > 220 ? contextText.slice(0, 220) + "…" : contextText;
+
   return (
-    <div style={{ padding: 16, fontFamily: "Segoe UI, sans-serif" }}>
-      <h2 style={{ marginTop: 0 }}>{title}</h2>
+    <div style={{ padding: 16, fontFamily: "Segoe UI, sans-serif", position: "relative" }}>
+      {/* Header row with global info "i" */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <h2 style={{ marginTop: 0, marginBottom: 10 }}>{title}</h2>
+
+        <button
+          type="button"
+          title={infoText}
+          style={{
+            border: `1px solid ${BORDER}`,
+            background: "white",
+            color: TEXT_DARK,
+            borderRadius: 999,
+            width: 26,
+            height: 26,
+            fontWeight: 800,
+            cursor: "help",
+            lineHeight: "24px",
+            textAlign: "center",
+            padding: 0,
+          }}
+        >
+          i
+        </button>
+      </div>
 
       {/* MODE TOGGLE */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -171,47 +297,83 @@ export default function App({ title }: AppProps) {
         >
           Explain
         </button>
+
+        <button
+          onClick={() => setMode("DOCUMENT")}
+          disabled={loading}
+          style={{
+            ...btnToggle,
+            background: mode === "DOCUMENT" ? BLUE : GRAY,
+            color: mode === "DOCUMENT" ? "white" : TEXT_DARK,
+            borderColor: mode === "DOCUMENT" ? BLUE : BORDER,
+            opacity: loading ? 0.7 : 1,
+          }}
+        >
+          Document
+        </button>
       </div>
 
       {/* USE SELECTION */}
       <button
         onClick={useSelection}
-        disabled={loading}
+        disabled={loading || mode === "DOCUMENT"}
         style={{
           ...btnSecondary,
           width: "100%",
           marginBottom: 10,
-          opacity: loading ? 0.7 : 1,
+          opacity: loading || mode === "DOCUMENT" ? 0.6 : 1,
+          cursor: loading || mode === "DOCUMENT" ? "default" : "pointer",
         }}
+        title={mode === "DOCUMENT" ? "Document mode reads the whole document" : "Set context from selection"}
       >
         Use selection
       </button>
 
+      {/* CONTEXT PREVIEW */}
+      {mode !== "DOCUMENT" && contextText.trim().length > 0 && (
+        <div style={{ marginBottom: 10, fontSize: 12, opacity: 0.85 }}>
+          <b>Context:</b>
+          <div style={{ whiteSpace: "pre-wrap", marginTop: 4 }}>{contextPreview}</div>
+          <button
+            onClick={() => setContextText("")}
+            disabled={loading}
+            style={{
+              ...btnSecondary,
+              marginTop: 6,
+              padding: "6px 10px",
+              borderRadius: 10,
+            }}
+          >
+            Clear context
+          </button>
+        </div>
+      )}
+
       {/* INSTRUCTION */}
-<textarea
-  value={instruction}
-  onChange={(e) => setInstruction(e.target.value)}
-  disabled={loading}
-  rows={4}
-  style={{
-    width: "100%",
-    padding: 10,
-    resize: "vertical",
-    boxSizing: "border-box",   // 🔑 TO JEST KLUCZ
-    marginTop: 6,
-    borderRadius: 10,
-    border: "1px solid #C8C8C8",
-    fontFamily: "Segoe UI, sans-serif",
-  }}
-  placeholder={
-    mode === "REWRITE"
-      ? "Np. popraw styl, skróć, wygeneruj nowy tekst…"
-      : "Np. zinterpretuj w 5 zdaniach…"
-  }
-/>
+      <textarea
+        value={instruction}
+        onChange={(e) => setInstruction(e.target.value)}
+        disabled={loading}
+        rows={4}
+        style={{
+          width: "100%",
+          padding: 10,
+          resize: "vertical",
+          boxSizing: "border-box",
+          borderRadius: 10,
+          border: `1px solid ${BORDER}`,
+          fontFamily: "Segoe UI, sans-serif",
+        }}
+        placeholder={
+          mode === "DOCUMENT"
+            ? "Np. sprawdź spójność terminologiczną / zaproponuj streszczenie / popraw strukturę akapitów…"
+            : mode === "REWRITE"
+            ? "Np. popraw styl, skróć, wygeneruj nowy tekst…"
+            : "Np. zinterpretuj w 5 zdaniach…"
+        }
+      />
 
-
-      {/* RUN ASSIST */}
+      {/* RUN */}
       <button
         onClick={runAssist}
         disabled={loading}
@@ -220,6 +382,7 @@ export default function App({ title }: AppProps) {
           width: "100%",
           marginTop: 10,
           opacity: loading ? 0.85 : 1,
+          cursor: loading ? "not-allowed" : "pointer",
         }}
       >
         {loading ? "Working..." : "Run Assist"}
@@ -230,6 +393,50 @@ export default function App({ title }: AppProps) {
           <b>Błąd:</b> {error}
         </div>
       )}
-    </div>
+
+{/* Global arrows (Undo / Redo) */}
+<div
+  style={{
+    position: "sticky",
+    bottom: 0,
+    marginTop: 12,
+    paddingTop: 10,
+    display: "flex",
+    gap: 10,
+    justifyContent: "flex-start",
+    background: "transparent",
+  }}
+>
+  <button
+    onClick={undo}
+    disabled={loading || !canUndo}
+    title="Undo (restore previous document state)"
+    style={{
+      ...iconBtn,
+      opacity: loading || !canUndo ? 0.4 : 1,
+      fontSize: "24px",       // ⬅ większa strzałka
+      fontWeight: 900,        // ⬅ grubsza
+      cursor: loading || !canUndo ? "default" : "pointer",
+    }}
+  >
+    ←
+  </button>
+
+  <button
+    onClick={redo}
+    disabled={loading || !canRedo}
+    title="Redo (restore next document state)"
+    style={{
+      ...iconBtn,
+      opacity: loading || !canRedo ? 0.4 : 1,
+      fontSize: "24px",       // ⬅ większa strzałka
+      fontWeight: 900,        // ⬅ grubsza
+      cursor: loading || !canRedo ? "default" : "pointer",
+    }}
+  >
+    →
+   </button>
+   </div>
+  </div>
   );
 }
