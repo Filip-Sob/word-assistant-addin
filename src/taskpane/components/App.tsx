@@ -76,6 +76,41 @@ const iconBtn: React.CSSProperties = {
   fontWeight: 800,
 };
 
+// ======= MAPOWANIA NA POLSKI (UI) =======
+const statusLabel = (s: string) => {
+  if (s === "SUCCESS") return "Sukces";
+  if (s === "ERROR") return "Błąd";
+  return s;
+};
+
+const scopeLabel = (s: string) => {
+  switch (s) {
+    case "SELECTION":
+      return "Zaznaczenie";
+    case "DOCUMENT":
+      return "Dokument";
+    case "INSERTION":
+      return "Wstawienie";
+    default:
+      return s;
+  }
+};
+
+const actionTypeLabel = (t: string) => {
+  switch (t) {
+    case "REWRITE":
+      return "Przepisz";
+    case "EXPLAIN":
+      return "Wyjaśnij";
+    case "DOCUMENT":
+      return "Dokument";
+    case "OTHER":
+      return "Inne";
+    default:
+      return t;
+  }
+};
+
 export default function App({ title }: AppProps) {
   const [tab, setTab] = useState<Tab>("ASSISTANT");
 
@@ -99,14 +134,14 @@ export default function App({ title }: AppProps) {
   const [history, setHistory] = useState<AiActionLog[]>([]);
   const [selectedLog, setSelectedLog] = useState<AiActionLog | null>(null);
 
-  // ✅ nowy: limit historii + dropdown
+  // limit historii + dropdown
   const [historyLimit, setHistoryLimit] = useState<number>(30);
 
   const infoText =
-    "Modes:\n" +
-    "• Rewrite: modifies selected text and replaces it.\n" +
-    "• Explain: adds analysis/commentary below selection (original stays).\n" +
-    "• Document: runs on the whole document (replaces whole content).";
+    "Tryby działania:\n" +
+    "• Przepisz: modyfikuje zaznaczony tekst i zastępuje go.\n" +
+    "• Wyjaśnij: dodaje analizę/komentarz poniżej zaznaczenia (oryginał zostaje).\n" +
+    "• Dokument: działa na całym dokumencie (zastępuje całą treść).";
 
   const readWholeDocument = async (): Promise<string> => {
     return await Word.run(async (context) => {
@@ -143,14 +178,14 @@ export default function App({ title }: AppProps) {
     });
 
     if (!selected) {
-      setError("Zaznacz tekst w Wordzie i kliknij „Use selection”.");
+      setError("Zaznacz tekst w Wordzie i kliknij „Użyj zaznaczenia”.");
       return;
     }
 
     setContextText(selected);
   };
 
-  // ✅ nowy: jedna funkcja z limitem
+  // jedna funkcja z limitem
   const loadHistoryWithLimit = async (limit: number) => {
     const clientId = getOrCreateClientId();
     setHistoryLoading(true);
@@ -162,7 +197,7 @@ export default function App({ title }: AppProps) {
       );
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        throw new Error(`HISTORY ${res.status}: ${body}`);
+        throw new Error(`HISTORIA ${res.status}: ${body}`);
       }
       const data: AiActionLog[] = await res.json();
       setHistory(data);
@@ -174,10 +209,45 @@ export default function App({ title }: AppProps) {
     }
   };
 
-  // zostawiamy alias, żeby reszta kodu była czytelna
+  // alias
   const loadHistory = async () => {
     await loadHistoryWithLimit(historyLimit);
   };
+
+  // czyszczenie historii (DELETE)
+  const [confirmClear, setConfirmClear] = useState(false);
+
+const clearHistory = async () => {
+  const clientId = getOrCreateClientId();
+  setHistoryLoading(true);
+  setError(null);
+
+  try {
+    const res = await fetch(`${API_HISTORY_URL}?clientId=${encodeURIComponent(clientId)}`, {
+      method: "DELETE",
+    });
+
+    const text = await res.text().catch(() => "");
+    if (!res.ok) {
+      throw new Error(`CZYSZCZENIE HISTORII ${res.status}: ${text}`);
+    }
+
+    // opcjonalnie: pokaż ile usunęło
+    // console.log("DELETE response:", text);
+
+    setHistory([]);
+    setSelectedLog(null);
+    setConfirmClear(false);
+
+    // dla pewności: odśwież listę z serwera
+    await loadHistory();
+  } catch (e: any) {
+    setError(e?.message ?? "Nieznany błąd");
+  } finally {
+    setHistoryLoading(false);
+  }
+};
+
 
   const runAssist = async () => {
     setLoading(true);
@@ -198,7 +268,7 @@ export default function App({ title }: AppProps) {
       let ctx = "";
 
       if (mode === "DOCUMENT") {
-        // Document może być pusty – wtedy generujemy treść od zera
+        // Dokument może być pusty – wtedy generujemy treść od zera
         ctx = beforeDoc ?? "";
       } else {
         ctx = contextText.trim();
@@ -213,7 +283,7 @@ export default function App({ title }: AppProps) {
         if (liveSelection) ctx = liveSelection;
 
         if (mode === "EXPLAIN" && !ctx) {
-          throw new Error("Tryb Explain wymaga zaznaczonego tekstu.");
+          throw new Error("Tryb „Wyjaśnij” wymaga zaznaczonego tekstu.");
         }
       }
 
@@ -240,7 +310,7 @@ export default function App({ title }: AppProps) {
       const raw = data.answer ?? "";
       const answer = raw.trim();
 
-      // Explain musi mieć treść, ale Rewrite/Document mogą legalnie zwrócić pusty tekst (delete)
+      // Wyjaśnij musi mieć treść, ale Przepisz/Dokument mogą legalnie zwrócić pusty tekst (delete)
       if (!answer && mode === "EXPLAIN") {
         throw new Error("Pusta odpowiedź z backendu.");
       }
@@ -257,7 +327,7 @@ export default function App({ title }: AppProps) {
           if (mode === "REWRITE") {
             range.insertText(raw, Word.InsertLocation.replace);
           } else {
-            range.insertParagraph("--- Assistant (Explain) ---", Word.InsertLocation.after);
+            
             range.insertParagraph(raw, Word.InsertLocation.after);
           }
 
@@ -349,7 +419,7 @@ export default function App({ title }: AppProps) {
             opacity: loading || historyLoading ? 0.7 : 1,
           }}
         >
-          Assistant
+          Asystent
         </button>
 
         <button
@@ -366,7 +436,7 @@ export default function App({ title }: AppProps) {
             opacity: loading || historyLoading ? 0.7 : 1,
           }}
         >
-          History
+          Historia
         </button>
       </div>
 
@@ -386,7 +456,7 @@ export default function App({ title }: AppProps) {
                 opacity: loading ? 0.7 : 1,
               }}
             >
-              Rewrite
+              Przepisz
             </button>
 
             <button
@@ -400,7 +470,7 @@ export default function App({ title }: AppProps) {
                 opacity: loading ? 0.7 : 1,
               }}
             >
-              Explain
+              Wyjaśnij
             </button>
 
             <button
@@ -414,7 +484,7 @@ export default function App({ title }: AppProps) {
                 opacity: loading ? 0.7 : 1,
               }}
             >
-              Document
+              Dokument
             </button>
           </div>
 
@@ -429,15 +499,15 @@ export default function App({ title }: AppProps) {
               opacity: loading || mode === "DOCUMENT" ? 0.6 : 1,
               cursor: loading || mode === "DOCUMENT" ? "default" : "pointer",
             }}
-            title={mode === "DOCUMENT" ? "Document mode reads the whole document" : "Set context from selection"}
+            title={mode === "DOCUMENT" ? "Tryb dokumentu pobiera cały dokument" : "Ustaw kontekst na podstawie zaznaczenia"}
           >
-            Use selection
+            Użyj zaznaczenia
           </button>
 
           {/* CONTEXT PREVIEW */}
           {mode !== "DOCUMENT" && contextText.trim().length > 0 && (
             <div style={{ marginBottom: 10, fontSize: 12, opacity: 0.85 }}>
-              <b>Context:</b>
+              <b>Kontekst:</b>
               <div style={{ whiteSpace: "pre-wrap", marginTop: 4 }}>{contextPreview}</div>
               <button
                 onClick={() => setContextText("")}
@@ -449,7 +519,7 @@ export default function App({ title }: AppProps) {
                   borderRadius: 10,
                 }}
               >
-                Clear context
+                Wyczyść kontekst
               </button>
             </div>
           )}
@@ -490,7 +560,7 @@ export default function App({ title }: AppProps) {
               cursor: loading ? "not-allowed" : "pointer",
             }}
           >
-            {loading ? "Working..." : "Run Assist"}
+            {loading ? "Przetwarzanie..." : "Uruchom"}
           </button>
 
           {error && (
@@ -515,7 +585,7 @@ export default function App({ title }: AppProps) {
             <button
               onClick={undo}
               disabled={loading || !canUndo}
-              title="Undo (restore previous document state)"
+              title="Cofnij (przywróć poprzedni stan dokumentu)"
               style={{
                 ...iconBtn,
                 opacity: loading || !canUndo ? 0.4 : 1,
@@ -530,7 +600,7 @@ export default function App({ title }: AppProps) {
             <button
               onClick={redo}
               disabled={loading || !canRedo}
-              title="Redo (restore next document state)"
+              title="Ponów (przywróć kolejny stan dokumentu)"
               style={{
                 ...iconBtn,
                 opacity: loading || !canRedo ? 0.4 : 1,
@@ -548,15 +618,41 @@ export default function App({ title }: AppProps) {
       {/* ===================== HISTORY TAB ===================== */}
       {tab === "HISTORY" && (
         <div>
-          <button
-            onClick={loadHistory}
-            disabled={historyLoading}
-            style={{ ...btnSecondary, width: "100%", marginBottom: 8 }}
-          >
-            {historyLoading ? "Loading..." : "Refresh history"}
-          </button>
+          {/* REFRESH + CLEAR */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <button
+              onClick={loadHistory}
+              disabled={historyLoading}
+              style={{ ...btnSecondary, width: "100%" }}
+            >
+              {historyLoading ? "Wczytywanie..." : "Odśwież historię"}
+            </button>
 
-          {/* ✅ nowy: dropdown limitu */}
+            <button
+            onClick={async () => {
+              if (!confirmClear) {
+                setConfirmClear(true);
+                // po 4s wraca do normalnego stanu
+                setTimeout(() => setConfirmClear(false), 4000);
+                return;
+              }
+              await clearHistory();
+            }}
+            disabled={historyLoading}
+            style={{
+              ...btnSecondary,
+              width: "100%",
+              borderColor: "#b00020",
+              color: "#b00020",
+              fontWeight: 700,
+            }}
+            title="Usuń wszystkie wpisy historii dla tego klienta"
+          >
+            {confirmClear ? "Kliknij ponownie, aby potwierdzić" : "Wyczyść historię"}
+          </button>
+          </div>
+
+          {/* dropdown limitu */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <div style={{ fontSize: 12, opacity: 0.85 }}>Pokaż wpisy:</div>
 
@@ -590,7 +686,7 @@ export default function App({ title }: AppProps) {
 
           {history.length === 0 ? (
             <div style={{ fontSize: 13, opacity: 0.85 }}>
-              Brak wpisów historii dla tego klienta. Uruchom jakąś akcję w zakładce Assistant.
+              Brak wpisów historii dla tego klienta. Uruchom jakąś akcję w zakładce Asystent.
             </div>
           ) : (
             <div style={{ display: "flex", gap: 10 }}>
@@ -608,7 +704,7 @@ export default function App({ title }: AppProps) {
                       color: selectedLog?.id === h.id ? "white" : TEXT_DARK,
                       borderColor: selectedLog?.id === h.id ? BLUE : BORDER,
                     }}
-                    title={`${h.actionType} • ${h.status}`}
+                    title={`${actionTypeLabel(h.actionType)} • ${statusLabel(h.status)}`}
                   >
                     {new Date(h.createdAt).toLocaleString()}
                   </button>
@@ -620,17 +716,17 @@ export default function App({ title }: AppProps) {
                 {selectedLog && (
                   <>
                     <div>
-                      <b>Status:</b> {selectedLog.status}
+                      <b>Status:</b> {statusLabel(selectedLog.status)}
                     </div>
                     <div>
-                      <b>Mode/Type:</b> {selectedLog.actionType}
+                      <b>Tryb/Typ:</b> {actionTypeLabel(selectedLog.actionType)}
                     </div>
                     <div>
-                      <b>Scope:</b> {selectedLog.scope}
+                      <b>Zakres:</b> {scopeLabel(selectedLog.scope)}
                     </div>
 
                     <div style={{ marginTop: 10 }}>
-                      <b>Instruction:</b>
+                      <b>Polecenie:</b>
                       <div
                         style={{
                           whiteSpace: "pre-wrap",
@@ -644,7 +740,7 @@ export default function App({ title }: AppProps) {
                     </div>
 
                     <div style={{ marginTop: 10 }}>
-                      <b>Input:</b>
+                      <b>Tekst źródłowy:</b>
                       <div
                         style={{
                           whiteSpace: "pre-wrap",
@@ -658,7 +754,7 @@ export default function App({ title }: AppProps) {
                     </div>
 
                     <div style={{ marginTop: 10 }}>
-                      <b>Output:</b>
+                      <b>Wynik:</b>
                       <div
                         style={{
                           whiteSpace: "pre-wrap",
@@ -673,7 +769,7 @@ export default function App({ title }: AppProps) {
 
                     {selectedLog.errorMessage && (
                       <div style={{ marginTop: 10, color: "crimson" }}>
-                        <b>Error:</b> {selectedLog.errorMessage}
+                        <b>Błąd:</b> {selectedLog.errorMessage}
                       </div>
                     )}
                   </>
